@@ -1,4 +1,55 @@
+cat > .gitignore << 'EOF'
+# Binaires et exécutables
+*.exe
+*.dll
+*.so
+*.dylib
 argocd-linux-amd64
+kubectl
+helm
+
+# Archives
 *.tar.gz
 *.zip
+*.rar
+*.7z
+
+# Packages
 *.deb
+*.rpm
+
+# Logs
+*.log
+
+# Fichiers temporaires
+*.tmp
+*.temp
+*.swp
+*.bak
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Ansible
+*.retry
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+.terraform.lock.hcl
+
+# Docker
+*.tar
+
+# Node modules (si applicable)
+node_modules/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+EOF
+argocd-linux-amd64
