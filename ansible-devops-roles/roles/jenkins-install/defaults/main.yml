@@ -1,0 +1,3 @@
+---
+# defaults file for jenkins-install
+jenkins_port: 8080

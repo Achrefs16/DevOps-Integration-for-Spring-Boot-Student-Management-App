@@ -1,0 +1,18 @@
+---
+# tasks file for kubectl-install
+
+- name: Télécharger kubectl
+  get_url:
+    url: "https://dl.k8s.io/release/{{ kubectl_version }}/bin/linux/amd64/kubectl"
+    dest: /usr/local/bin/kubectl
+    mode: '0755'
+  become: yes
+
+- name: Vérifier l'installation de kubectl
+  command: kubectl version --client
+  register: kubectl_check
+  changed_when: false
+
+- name: Afficher la version de kubectl
+  debug:
+    msg: "{{ kubectl_check.stdout }}"

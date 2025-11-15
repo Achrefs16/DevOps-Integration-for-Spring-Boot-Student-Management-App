@@ -1,0 +1,22 @@
+---
+# tasks file for java-install
+
+- name: Mettre à jour le cache apt
+  apt:
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+
+- name: Installer OpenJDK {{ java_version }}
+  apt:
+    name: "openjdk-{{ java_version }}-jdk"
+    state: present
+  when: ansible_os_family == "Debian"
+
+- name: Vérifier l'installation de Java
+  command: java -version
+  register: java_check
+  changed_when: false
+
+- name: Afficher la version de Java installée
+  debug:
+    msg: "{{ java_check.stderr }}"

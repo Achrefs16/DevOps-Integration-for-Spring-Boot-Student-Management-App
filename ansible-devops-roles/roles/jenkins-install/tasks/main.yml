@@ -1,0 +1,38 @@
+---
+# tasks file for jenkins-install
+
+- name: Ajouter la clé GPG de Jenkins
+  apt_key:
+    url: https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key
+    state: present
+
+- name: Ajouter le dépôt Jenkins
+  apt_repository:
+    repo: "deb https://pkg.jenkins.io/debian-stable binary/"
+    state: present
+
+- name: Installer Jenkins
+  apt:
+    name: jenkins
+    state: present
+    update_cache: yes
+
+- name: Démarrer et activer Jenkins
+  systemd:
+    name: jenkins
+    state: started
+    enabled: yes
+
+- name: Attendre que Jenkins démarre
+  wait_for:
+    port: "{{ jenkins_port }}"
+    delay: 10
+
+- name: Récupérer le mot de passe initial
+  command: cat /var/lib/jenkins/secrets/initialAdminPassword
+  register: jenkins_initial_password
+  changed_when: false
+
+- name: Afficher le mot de passe initial de Jenkins
+  debug:
+    msg: "Mot de passe initial Jenkins: {{ jenkins_initial_password.stdout }}"

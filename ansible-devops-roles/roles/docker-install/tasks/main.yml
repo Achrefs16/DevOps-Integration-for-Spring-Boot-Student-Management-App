@@ -1,0 +1,52 @@
+---
+# tasks file for docker-install
+
+- name: Vérifier si Docker est déjà installé
+  command: docker --version
+  register: docker_installed
+  ignore_errors: yes
+  changed_when: false
+
+- name: Installer Docker via le script officiel
+  shell: |
+    curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+    sh /tmp/get-docker.sh
+  when: docker_installed.rc != 0
+
+- name: Démarrer et activer Docker
+  systemd:
+    name: docker
+    state: started
+    enabled: yes
+
+- name: Ajouter l'utilisateur au groupe docker
+  user:
+    name: "{{ ansible_user }}"
+    groups: docker
+    append: yes
+  when: ansible_user is defined
+
+- name: Installer Docker Compose (standalone)
+  shell: |
+    DOCKER_COMPOSE_VERSION=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep 'tag_name' | cut -d\" -f4)
+    curl -L "https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+    chmod +x /usr/local/bin/docker-compose
+  args:
+    creates: /usr/local/bin/docker-compose
+
+- name: Vérifier l'installation de Docker
+  command: docker --version
+  register: docker_version
+  changed_when: false
+
+- name: Vérifier l'installation de Docker Compose
+  command: docker-compose --version
+  register: docker_compose_version
+  changed_when: false
+  ignore_errors: yes
+
+- name: Afficher les versions installées
+  debug:
+    msg: 
+      - "{{ docker_version.stdout }}"
+      - "{{ docker_compose_version.stdout | default('Docker Compose non installé') }}"
