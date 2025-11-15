@@ -1,0 +1,171 @@
+pipeline {
+    agent any
+    
+    environment {
+        // Docker Hub credentials (à configurer dans Jenkins)
+        DOCKER_HUB_CREDENTIALS = credentials('dockerhub-credentials')
+        DOCKER_IMAGE = 'achrefs161/student-management'
+        
+        // Versioning
+        VERSION = "${BUILD_NUMBER}"
+        IMAGE_TAG = "v1.${BUILD_NUMBER}"
+    }
+    
+    stages {
+        stage('🔍 Checkout Code') {
+            steps {
+                script {
+                    echo '================================================'
+                    echo '📥 Récupération du code depuis GitHub...'
+                    echo '================================================'
+                }
+                checkout scm
+                script {
+                    // Afficher les informations Git
+                    sh '''
+                        echo "Branch: ${GIT_BRANCH}"
+                        echo "Commit: ${GIT_COMMIT}"
+                        git log -1 --pretty=format:"%h - %an : %s"
+                    '''
+                }
+            }
+        }
+        
+        stage('🏗️ Build avec Maven') {
+            steps {
+                script {
+                    echo '================================================'
+                    echo '🔨 Compilation du projet avec Maven...'
+                    echo '================================================'
+                }
+                sh '''
+                    echo "Nettoyage et compilation..."
+                    mvn clean compile
+                    
+                    echo "Affichage de la version Maven..."
+                    mvn --version
+                '''
+            }
+        }
+        
+        stage('📦 Création du JAR') {
+            steps {
+                script {
+                    echo '================================================'
+                    echo '📦 Création du fichier JAR...'
+                    echo '================================================'
+                }
+                sh '''
+                    mvn package -DskipTests
+                    
+                    echo "✅ JAR créé avec succès!"
+                    ls -lh target/*.jar
+                '''
+            }
+            post {
+                success {
+                    archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
+                }
+            }
+        }
+        
+        stage('🐳 Construction de l\'image Docker') {
+            steps {
+                script {
+                    echo '================================================'
+                    echo '🐳 Construction de l\'image Docker...'
+                    echo '================================================'
+                }
+                sh """
+                    echo "Building Docker image: ${DOCKER_IMAGE}:${IMAGE_TAG}"
+                    
+                    docker build \
+                        --build-arg BUILD_DATE=\$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
+                        --build-arg VERSION=${IMAGE_TAG} \
+                        -t ${DOCKER_IMAGE}:${IMAGE_TAG} \
+                        -t ${DOCKER_IMAGE}:latest \
+                        .
+                    
+                    echo "✅ Image Docker construite avec succès!"
+                    docker images | grep ${DOCKER_IMAGE}
+                """
+            }
+        }
+        
+        stage('🔍 Inspection de l\'image') {
+            steps {
+                script {
+                    echo '================================================'
+                    echo '🔍 Inspection de l\'image Docker...'
+                    echo '================================================'
+                }
+                sh """
+                    echo "Taille de l'image:"
+                    docker images ${DOCKER_IMAGE}:${IMAGE_TAG} --format "{{.Repository}}:{{.Tag}} - {{.Size}}"
+                    
+                    echo "\nInformations détaillées:"
+                    docker inspect ${DOCKER_IMAGE}:${IMAGE_TAG} --format='{{json .Config.Labels}}' | jq '.'
+                """
+            }
+        }
+        
+        stage('📤 Push vers Docker Hub') {
+            steps {
+                script {
+                    echo '================================================'
+                    echo '📤 Push de l\'image vers Docker Hub...'
+                    echo '================================================'
+                }
+                sh """
+                    echo "Login to Docker Hub..."
+                    echo ${DOCKER_HUB_CREDENTIALS_PSW} | docker login -u ${DOCKER_HUB_CREDENTIALS_USR} --password-stdin
+                    
+                    echo "Pushing ${DOCKER_IMAGE}:${IMAGE_TAG}..."
+                    docker push ${DOCKER_IMAGE}:${IMAGE_TAG}
+                    
+                    echo "Pushing ${DOCKER_IMAGE}:latest..."
+                    docker push ${DOCKER_IMAGE}:latest
+                    
+                    echo "✅ Images pushées avec succès!"
+                    
+                    docker logout
+                """
+            }
+        }
+        
+        stage('✅ Résumé Build & Docker') {
+            steps {
+                script {
+                    echo '================================================'
+                    echo '✅ RÉSUMÉ DE L\'ÉTAPE BUILD & DOCKER'
+                    echo '================================================'
+                    sh """
+                        echo "✓ Code récupéré depuis: ${GIT_BRANCH}"
+                        echo "✓ Commit: ${GIT_COMMIT}"
+                        echo "✓ JAR créé: target/student-management-1.0.0.jar"
+                        echo "✓ Image Docker: ${DOCKER_IMAGE}:${IMAGE_TAG}"
+                        echo "✓ Image Docker: ${DOCKER_IMAGE}:latest"
+                        echo "✓ Images disponibles sur Docker Hub"
+                        echo ""
+                        echo "🎉 Étape 1 terminée avec succès!"
+                    """
+                }
+            }
+        }
+    }
+    
+    post {
+        success {
+            echo '✅ Pipeline Build & Docker exécuté avec succès!'
+        }
+        failure {
+            echo '❌ Pipeline Build & Docker échoué!'
+        }
+        always {
+            echo '🧹 Nettoyage des images Docker locales...'
+            sh '''
+                docker image prune -f
+            '''
+        }
+    }
+}
