@@ -1,0 +1,4 @@
+argocd-linux-amd64
+*.tar.gz
+*.zip
+*.deb
