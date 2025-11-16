@@ -347,28 +347,47 @@ EOF
                 }
             }
         }
-        
-        stage('🧪 Tests de Fumée') {
-            steps {
-                script {
-                    echo '================================================'
-                    echo '🧪 Exécution des tests de fumée...'
-                    echo '================================================'
-                }
-                sh '''
-                    curl -f http://localhost:7000/actuator/health || exit 1
-                    curl -f http://localhost:7000/etudiants || exit 1
-                    
-                    curl -X POST http://localhost:7000/etudiants \
-                      -H "Content-Type: application/json" \
-                      -d '{"nom":"Test","prenom":"Security","email":"security@test.com","niveau":"L1"}' \
-                      -f || exit 1
-                    
-                    echo "✅ Tous les smoke tests sont passés!"
-                '''
-            }
-        }
-        
+     stage('🧪 Tests de Fumée') {
+         steps {
+             script {
+                 echo '================================================'
+                 echo '🧪 Exécution des tests de fumée...'
+                 echo '================================================'
+             }
+             sh """
+                 echo "Test 1: Health Check..."
+                 curl -f http://localhost:7000/actuator/health || exit 1
+                 echo "✅ Health check OK!"
+                 
+                 echo ""
+                 echo "Test 2: Liste des étudiants..."
+                 curl -f http://localhost:7000/etudiants || exit 1
+                 echo "✅ Endpoint GET /etudiants OK!"
+                 
+                 echo ""
+                 echo "Test 3: Création d'un étudiant..."
+                 # Utiliser BUILD_NUMBER pour un email unique à chaque build
+                 curl -X POST http://localhost:7000/etudiants \
+                   -H "Content-Type: application/json" \
+                   -d '{
+                     "nom":"Test",
+                     "prenom":"Build",
+                     "email":"test-build-${BUILD_NUMBER}@jenkins.local",
+                     "niveau":"L1"
+                   }' \
+                   -f || exit 1
+                 echo "✅ Création d'étudiant OK!"
+                 
+                 echo ""
+                 echo "Test 4: Vérification de la création..."
+                 STUDENTS=\$(curl -s http://localhost:7000/etudiants)
+                 echo "Nombre d'étudiants: \$(echo \$STUDENTS | jq '. | length')"
+                 
+                 echo ""
+                 echo "✅ Tous les smoke tests sont passés avec succès!"
+             """
+         }
+     }
  stage('📤 Push vers Docker Hub') {
      steps {
          sh """
