@@ -2,16 +2,14 @@ pipeline {
     agent any
     
     environment {
-        // Docker Hub credentials
         DOCKER_HUB_CREDENTIALS = credentials('dockerhub-credentials')
         DOCKER_IMAGE = 'achrefs161/student-management'
-        
-        // Versioning
         VERSION = "${BUILD_NUMBER}"
         IMAGE_TAG = "v1.${BUILD_NUMBER}"
-        
-        // SonarQube
         SONAR_TOKEN = credentials('sonarqube-token')
+        
+        // Définir le répertoire de travail
+        PROJECT_DIR = 'spring-boot-student-management'
     }
     
     stages {
@@ -25,9 +23,21 @@ pipeline {
                 checkout scm
                 script {
                     sh '''
-                        echo "Branch: ${GIT_BRANCH}"
-                        echo "Commit: ${GIT_COMMIT}"
-                        git log -1 --pretty=format:"%h - %an : %s"
+                        echo "Contenu de la racine:"
+                        ls -la
+                        
+                        echo ""
+                        echo "Contenu du projet:"
+                        ls -la ${PROJECT_DIR}/
+                        
+                        echo ""
+                        echo "Vérification du pom.xml:"
+                        if [ -f ${PROJECT_DIR}/pom.xml ]; then
+                            echo "✅ pom.xml trouvé dans ${PROJECT_DIR}/"
+                        else
+                            echo "❌ pom.xml NON trouvé!"
+                            exit 1
+                        fi
                     '''
                 }
             }
@@ -40,10 +50,12 @@ pipeline {
                     echo '🔨 Compilation du projet avec Maven...'
                     echo '================================================'
                 }
-                sh '''
-                    mvn clean compile
-                    mvn --version
-                '''
+                dir("${PROJECT_DIR}") {
+                    sh '''
+                        mvn clean compile
+                        mvn --version
+                    '''
+                }
             }
         }
         
@@ -54,13 +66,15 @@ pipeline {
                     echo '🧪 Exécution des tests unitaires...'
                     echo '================================================'
                 }
-                sh '''
-                    mvn test -Dtest=*Test
-                '''
+                dir("${PROJECT_DIR}") {
+                    sh '''
+                        mvn test -Dtest=*Test
+                    '''
+                }
             }
             post {
                 always {
-                    junit '**/target/surefire-reports/*.xml'
+                    junit "${PROJECT_DIR}/**/target/surefire-reports/*.xml"
                 }
             }
         }
@@ -72,9 +86,11 @@ pipeline {
                     echo '🔬 Exécution des tests d\'intégration...'
                     echo '================================================'
                 }
-                sh '''
-                    mvn test -Dtest=*IntegrationTest
-                '''
+                dir("${PROJECT_DIR}") {
+                    sh '''
+                        mvn test -Dtest=*IntegrationTest
+                    '''
+                }
             }
         }
         
@@ -85,16 +101,18 @@ pipeline {
                     echo '📊 Génération du rapport de couverture...'
                     echo '================================================'
                 }
-                sh '''
-                    mvn jacoco:report
-                '''
+                dir("${PROJECT_DIR}") {
+                    sh '''
+                        mvn jacoco:report
+                    '''
+                }
             }
             post {
                 always {
                     jacoco(
-                        execPattern: '**/target/jacoco.exec',
-                        classPattern: '**/target/classes',
-                        sourcePattern: '**/src/main/java'
+                        execPattern: "${PROJECT_DIR}/**/target/jacoco.exec",
+                        classPattern: "${PROJECT_DIR}/**/target/classes",
+                        sourcePattern: "${PROJECT_DIR}/**/src/main/java"
                     )
                 }
             }
@@ -107,14 +125,16 @@ pipeline {
                     echo '📊 Analyse de la qualité du code avec SonarQube...'
                     echo '================================================'
                 }
-                withSonarQubeEnv('SonarQube') {
-                    sh '''
-                        mvn sonar:sonar \
-                          -Dsonar.projectKey=student-management \
-                          -Dsonar.projectName="Student Management API" \
-                          -Dsonar.host.url=http://localhost:9000 \
-                          -Dsonar.token=${SONAR_TOKEN}
-                    '''
+                dir("${PROJECT_DIR}") {
+                    withSonarQubeEnv('SonarQube') {
+                        sh '''
+                            mvn sonar:sonar \
+                              -Dsonar.projectKey=student-management \
+                              -Dsonar.projectName="Student Management API" \
+                              -Dsonar.host.url=http://localhost:9000 \
+                              -Dsonar.token=${SONAR_TOKEN}
+                        '''
+                    }
                 }
             }
         }
@@ -139,14 +159,16 @@ pipeline {
                     echo '📦 Création du fichier JAR...'
                     echo '================================================'
                 }
-                sh '''
-                    mvn package -DskipTests
-                    ls -lh target/*.jar
-                '''
+                dir("${PROJECT_DIR}") {
+                    sh '''
+                        mvn package -DskipTests
+                        ls -lh target/*.jar
+                    '''
+                }
             }
             post {
                 success {
-                    archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
+                    archiveArtifacts artifacts: "${PROJECT_DIR}/target/*.jar", fingerprint: true
                 }
             }
         }
@@ -158,26 +180,26 @@ pipeline {
                     echo '🔒 Scan de sécurité du code source avec Trivy...'
                     echo '================================================'
                 }
-                sh '''
-                    # Scan du système de fichiers (code source)
-                    trivy fs --security-checks vuln,config,secret \
-                      --severity HIGH,CRITICAL \
-                      --format json \
-                      --output trivy-code-report.json \
-                      .
-                    
-                    # Afficher le résumé
-                    echo ""
-                    echo "📋 Résumé du scan du code source:"
-                    trivy fs --security-checks vuln,config,secret \
-                      --severity HIGH,CRITICAL \
-                      --format table \
-                      .
-                '''
+                dir("${PROJECT_DIR}") {
+                    sh '''
+                        trivy fs --security-checks vuln,config,secret \
+                          --severity HIGH,CRITICAL \
+                          --format json \
+                          --output trivy-code-report.json \
+                          .
+                        
+                        echo ""
+                        echo "📋 Résumé du scan du code source:"
+                        trivy fs --security-checks vuln,config,secret \
+                          --severity HIGH,CRITICAL \
+                          --format table \
+                          .
+                    '''
+                }
             }
             post {
                 always {
-                    archiveArtifacts artifacts: 'trivy-code-report.json', allowEmptyArchive: true
+                    archiveArtifacts artifacts: "${PROJECT_DIR}/trivy-code-report.json", allowEmptyArchive: true
                 }
             }
         }
@@ -189,16 +211,18 @@ pipeline {
                     echo '🐳 Construction de l\'image Docker...'
                     echo '================================================'
                 }
-                sh """
-                    docker build \
-                        --build-arg BUILD_DATE=\$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
-                        --build-arg VERSION=${IMAGE_TAG} \
-                        -t ${DOCKER_IMAGE}:${IMAGE_TAG} \
-                        -t ${DOCKER_IMAGE}:latest \
-                        .
-                    
-                    docker images | grep ${DOCKER_IMAGE}
-                """
+                dir("${PROJECT_DIR}") {
+                    sh """
+                        docker build \
+                            --build-arg BUILD_DATE=\$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
+                            --build-arg VERSION=${IMAGE_TAG} \
+                            -t ${DOCKER_IMAGE}:${IMAGE_TAG} \
+                            -t ${DOCKER_IMAGE}:latest \
+                            .
+                        
+                        docker images | grep ${DOCKER_IMAGE}
+                    """
+                }
             }
         }
         
@@ -209,77 +233,36 @@ pipeline {
                     echo '🔒 Scan de sécurité de l\'image Docker avec Trivy...'
                     echo '================================================'
                 }
-                sh """
-                    # Scan de l'image Docker
-                    trivy image --severity HIGH,CRITICAL \
-                      --format json \
-                      --output trivy-image-report.json \
-                      ${DOCKER_IMAGE}:${IMAGE_TAG}
-                    
-                    # Afficher le résumé
-                    echo ""
-                    echo "📋 Résumé du scan de l'image Docker:"
-                    trivy image --severity HIGH,CRITICAL \
-                      --format table \
-                      ${DOCKER_IMAGE}:${IMAGE_TAG}
-                    
-                    # Générer un rapport HTML
-                    trivy image --severity HIGH,CRITICAL \
-                      --format template \
-                      --template "@/usr/local/share/trivy/templates/html.tpl" \
-                      --output trivy-image-report.html \
-                      ${DOCKER_IMAGE}:${IMAGE_TAG} || true
-                """
+                dir("${PROJECT_DIR}") {
+                    sh """
+                        trivy image --severity HIGH,CRITICAL \
+                          --format json \
+                          --output trivy-image-report.json \
+                          ${DOCKER_IMAGE}:${IMAGE_TAG}
+                        
+                        echo ""
+                        echo "📋 Résumé du scan de l'image Docker:"
+                        trivy image --severity HIGH,CRITICAL \
+                          --format table \
+                          ${DOCKER_IMAGE}:${IMAGE_TAG}
+                        
+                        trivy image --severity HIGH,CRITICAL \
+                          --format template \
+                          --template "@/usr/local/share/trivy/templates/html.tpl" \
+                          --output trivy-image-report.html \
+                          ${DOCKER_IMAGE}:${IMAGE_TAG} || true
+                    """
+                }
             }
             post {
                 always {
-                    archiveArtifacts artifacts: 'trivy-image-report.*', allowEmptyArchive: true
+                    archiveArtifacts artifacts: "${PROJECT_DIR}/trivy-image-report.*", allowEmptyArchive: true
                     publishHTML(target: [
-                        reportDir: '.',
+                        reportDir: "${PROJECT_DIR}",
                         reportFiles: 'trivy-image-report.html',
                         reportName: 'Trivy Security Report',
                         allowMissing: true
                     ])
-                }
-            }
-        }
-        
-        stage('📊 Génération Rapport de Sécurité Complet') {
-            steps {
-                script {
-                    echo '================================================'
-                    echo '📊 Génération du rapport de sécurité complet...'
-                    echo '================================================'
-                }
-                sh '''
-                    # Créer un rapport consolidé
-                    cat > security-summary.txt << EOF
-================================================
-🔒 RAPPORT DE SÉCURITÉ - Build #${BUILD_NUMBER}
-================================================
-
-Date: $(date)
-Branch: ${GIT_BRANCH}
-Commit: ${GIT_COMMIT}
-
-📊 Analyse SonarQube:
-   URL: http://localhost:9000/dashboard?id=student-management
-
-🔍 Scan Trivy - Code Source:
-$(trivy fs --severity HIGH,CRITICAL --format json . | jq -r '.Results[].Vulnerabilities | length // 0' | awk '{sum+=$1} END {print "   Vulnérabilités HIGH/CRITICAL trouvées: " sum}')
-
-🐳 Scan Trivy - Image Docker:
-$(trivy image --severity HIGH,CRITICAL --format json ${DOCKER_IMAGE}:${IMAGE_TAG} | jq -r '.Results[].Vulnerabilities | length // 0' | awk '{sum+=$1} END {print "   Vulnérabilités HIGH/CRITICAL trouvées: " sum}')
-
-================================================
-EOF
-
-                    cat security-summary.txt
-                '''
-            }
-            post {
-                always {
-                    archiveArtifacts artifacts: 'security-summary.txt', allowEmptyArchive: true
                 }
             }
         }
@@ -291,9 +274,9 @@ EOF
                     echo '🚀 Déploiement local de l\'application...'
                     echo '================================================'
                 }
-                sh """
-                    # Créer docker-compose pour le déploiement
-                    cat > docker-compose.deploy.yml << 'EOF'
+                dir("${PROJECT_DIR}") {
+                    sh """
+                        cat > docker-compose.deploy.yml << 'EOF'
 version: '3.8'
 
 services:
@@ -344,18 +327,15 @@ networks:
     driver: bridge
 EOF
 
-                    # Arrêter les anciens conteneurs
-                    docker-compose -f docker-compose.deploy.yml down || true
-                    
-                    # Démarrer les nouveaux conteneurs
-                    docker-compose -f docker-compose.deploy.yml up -d
-                    
-                    # Attendre le démarrage
-                    echo "Attente du démarrage de l'application..."
-                    sleep 30
-                    
-                    docker-compose -f docker-compose.deploy.yml ps
-                """
+                        docker-compose -f docker-compose.deploy.yml down || true
+                        docker-compose -f docker-compose.deploy.yml up -d
+                        
+                        echo "Attente du démarrage..."
+                        sleep 30
+                        
+                        docker-compose -f docker-compose.deploy.yml ps
+                    """
+                }
             }
         }
         
@@ -405,16 +385,12 @@ EOF
                     echo '✅ RÉSUMÉ DU PIPELINE COMPLET'
                     echo '================================================'
                     sh """
-                        echo "✓ Code analysé: ${GIT_BRANCH}"
-                        echo "✓ Tests unitaires: PASSED"
-                        echo "✓ Tests d'intégration: PASSED"
-                        echo "✓ Couverture de code: Rapport Jacoco généré"
-                        echo "✓ Qualité du code: SonarQube - http://localhost:9000"
-                        echo "✓ Sécurité code source: Trivy scan effectué"
-                        echo "✓ Sécurité image Docker: Trivy scan effectué"
-                        echo "✓ Image Docker: ${DOCKER_IMAGE}:${IMAGE_TAG}"
-                        echo "✓ Déploiement local: http://localhost:7000"
-                        echo "✓ Push Docker Hub: SUCCESS"
+                        echo "✓ Projet: ${PROJECT_DIR}"
+                        echo "✓ Tests: PASSED"
+                        echo "✓ SonarQube: http://localhost:9000"
+                        echo "✓ Sécurité: Trivy scans effectués"
+                        echo "✓ Image: ${DOCKER_IMAGE}:${IMAGE_TAG}"
+                        echo "✓ App: http://localhost:7000"
                         echo ""
                         echo "🎉 Pipeline terminé avec succès!"
                     """
@@ -426,20 +402,13 @@ EOF
     post {
         success {
             echo '✅ Pipeline exécuté avec succès!'
-            echo '📊 SonarQube: http://localhost:9000/dashboard?id=student-management'
-            echo '🚀 Application: http://localhost:7000'
         }
         failure {
             echo '❌ Pipeline échoué!'
-            sh '''
-                docker-compose -f docker-compose.deploy.yml logs app || true
-            '''
         }
         always {
             echo '🧹 Nettoyage...'
-            sh '''
-                docker image prune -f
-            '''
+            sh 'docker image prune -f'
         }
     }
 }
