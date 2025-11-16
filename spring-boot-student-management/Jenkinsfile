@@ -432,4 +432,91 @@ EOF
             sh 'docker image prune -f'
         }
     }
+    def sendSlackNotification(String status, String stage = '') {
+        def color = ''
+        def emoji = ''
+        def message = ''
+        
+        switch(status) {
+            case 'STARTED':
+                color = '#439FE0'  // Bleu
+                emoji = '🚀'
+                message = "Pipeline démarré"
+                break
+            case 'SUCCESS':
+                color = 'good'  // Vert
+                emoji = '✅'
+                message = "Pipeline réussi"
+                break
+            case 'FAILURE':
+                color = 'danger'  // Rouge
+                emoji = '❌'
+                message = "Pipeline échoué"
+                break
+            case 'UNSTABLE':
+                color = 'warning'  // Orange
+                emoji = '⚠️'
+                message = "Pipeline instable"
+                break
+            case 'STAGE_SUCCESS':
+                color = 'good'
+                emoji = '✅'
+                message = "Stage réussi: ${stage}"
+                break
+            case 'STAGE_FAILURE':
+                color = 'danger'
+                emoji = '❌'
+                message = "Stage échoué: ${stage}"
+                break
+        }
+        
+        def attachments = [
+            [
+                color: color,
+                text: "${emoji} *${message}*",
+                fields: [
+                    [
+                        title: "Job",
+                        value: "${env.JOB_NAME}",
+                        short: true
+                    ],
+                    [
+                        title: "Build",
+                        value: "#${env.BUILD_NUMBER}",
+                        short: true
+                    ],
+                    [
+                        title: "Branch",
+                        value: "${env.GIT_BRANCH ?: 'N/A'}",
+                        short: true
+                    ],
+                    [
+                        title: "Durée",
+                        value: "${currentBuild.durationString.replace(' and counting', '')}",
+                        short: true
+                    ]
+                ],
+                actions: [
+                    [
+                        type: "button",
+                        text: "📊 Voir les logs",
+                        url: "${env.BUILD_URL}console"
+                    ],
+                    [
+                        type: "button",
+                        text: "📈 SonarQube",
+                        url: "http://localhost:9000/dashboard?id=student-management"
+                    ]
+                ],
+                footer: "Jenkins CI/CD",
+                footer_icon: "https://jenkins.io/images/logos/jenkins/jenkins.png",
+                ts: System.currentTimeMillis() / 1000
+            ]
+        ]
+        
+        slackSend(
+            channel: '#jenkins-builds',  // Changez selon votre canal
+            attachments: attachments
+        )
+    }
 }
