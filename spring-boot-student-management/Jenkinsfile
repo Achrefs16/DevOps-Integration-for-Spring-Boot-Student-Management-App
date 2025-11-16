@@ -2,9 +2,9 @@ pipeline {
     agent any
     
     environment {
-        // Docker Hub credentials (à configurer dans Jenkins)
+        // Docker Hub credentials
         DOCKER_HUB_CREDENTIALS = credentials('dockerhub-credentials')
-        DOCKER_IMAGE = 'achrefs161/student-management'
+        DOCKER_IMAGE = 'achrefs16/student-management'
         
         // Versioning
         VERSION = "${BUILD_NUMBER}"
@@ -21,7 +21,6 @@ pipeline {
                 }
                 checkout scm
                 script {
-                    // Afficher les informations Git
                     sh '''
                         echo "Branch: ${GIT_BRANCH}"
                         echo "Commit: ${GIT_COMMIT}"
@@ -39,12 +38,70 @@ pipeline {
                     echo '================================================'
                 }
                 sh '''
-                    echo "Nettoyage et compilation..."
                     mvn clean compile
-                    
-                    echo "Affichage de la version Maven..."
                     mvn --version
                 '''
+            }
+        }
+        
+        stage('🧪 Tests Unitaires') {
+            steps {
+                script {
+                    echo '================================================'
+                    echo '🧪 Exécution des tests unitaires...'
+                    echo '================================================'
+                }
+                sh '''
+                    mvn test -Dtest=*Test
+                    echo "✅ Tests unitaires terminés!"
+                '''
+            }
+            post {
+                always {
+                    junit '**/target/surefire-reports/*.xml'
+                    publishHTML(target: [
+                        reportDir: 'target/surefire-reports',
+                        reportFiles: 'index.html',
+                        reportName: 'Test Report'
+                    ])
+                }
+            }
+        }
+        
+        stage('🔬 Tests d\'Intégration') {
+            steps {
+                script {
+                    echo '================================================'
+                    echo '🔬 Exécution des tests d\'intégration...'
+                    echo '================================================'
+                }
+                sh '''
+                    mvn test -Dtest=*IntegrationTest
+                    echo "✅ Tests d'intégration terminés!"
+                '''
+            }
+        }
+        
+        stage('📊 Rapport de Couverture') {
+            steps {
+                script {
+                    echo '================================================'
+                    echo '📊 Génération du rapport de couverture...'
+                    echo '================================================'
+                }
+                sh '''
+                    mvn jacoco:report
+                    echo "✅ Rapport de couverture généré!"
+                '''
+            }
+            post {
+                always {
+                    jacoco(
+                        execPattern: '**/target/jacoco.exec',
+                        classPattern: '**/target/classes',
+                        sourcePattern: '**/src/main/java'
+                    )
+                }
             }
         }
         
@@ -57,7 +114,6 @@ pipeline {
                 }
                 sh '''
                     mvn package -DskipTests
-                    
                     echo "✅ JAR créé avec succès!"
                     ls -lh target/*.jar
                 '''
@@ -77,8 +133,6 @@ pipeline {
                     echo '================================================'
                 }
                 sh """
-                    echo "Building Docker image: ${DOCKER_IMAGE}:${IMAGE_TAG}"
-                    
                     docker build \
                         --build-arg BUILD_DATE=\$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
                         --build-arg VERSION=${IMAGE_TAG} \
@@ -86,26 +140,139 @@ pipeline {
                         -t ${DOCKER_IMAGE}:latest \
                         .
                     
-                    echo "✅ Image Docker construite avec succès!"
+                    echo "✅ Image Docker construite!"
                     docker images | grep ${DOCKER_IMAGE}
                 """
             }
         }
         
-        stage('🔍 Inspection de l\'image') {
+        stage('🚀 Déploiement Local - PostgreSQL') {
             steps {
                 script {
                     echo '================================================'
-                    echo '🔍 Inspection de l\'image Docker...'
+                    echo '🐘 Démarrage de PostgreSQL...'
+                    echo '================================================'
+                }
+                sh '''
+                    # Arrêter les anciens conteneurs
+                    docker-compose down || true
+                    
+                    # Démarrer PostgreSQL
+                    docker-compose up -d postgres
+                    
+                    # Attendre que PostgreSQL soit prêt
+                    echo "Attente du démarrage de PostgreSQL..."
+                    sleep 15
+                    
+                    # Vérifier PostgreSQL
+                    docker-compose ps
+                    echo "✅ PostgreSQL démarré!"
+                '''
+            }
+        }
+        
+        stage('🚀 Déploiement Local - Application') {
+            steps {
+                script {
+                    echo '================================================'
+                    echo '🚀 Déploiement de l\'application...'
                     echo '================================================'
                 }
                 sh """
-                    echo "Taille de l'image:"
-                    docker images ${DOCKER_IMAGE}:${IMAGE_TAG} --format "{{.Repository}}:{{.Tag}} - {{.Size}}"
+                    # Créer un docker-compose spécifique pour le déploiement
+                    cat > docker-compose.deploy.yml << 'EOF'
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: students-postgres
+    environment:
+      POSTGRES_DB: students_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - students-network
+
+  app:
+    image: ${DOCKER_IMAGE}:${IMAGE_TAG}
+    container_name: student-app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/students_db
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+    ports:
+      - "7000:7000"
+    networks:
+      - students-network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:7000/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  postgres_data:
+
+networks:
+  students-network:
+    driver: bridge
+EOF
+
+                    # Déployer l'application
+                    docker-compose -f docker-compose.deploy.yml up -d app
                     
-                    echo "\nInformations détaillées:"
-                    docker inspect ${DOCKER_IMAGE}:${IMAGE_TAG} --format='{{json .Config.Labels}}' | jq '.'
+                    # Attendre le démarrage
+                    echo "Attente du démarrage de l'application..."
+                    sleep 30
+                    
+                    # Vérifier les conteneurs
+                    docker-compose -f docker-compose.deploy.yml ps
                 """
+            }
+        }
+        
+        stage('🧪 Tests de Fumée (Smoke Tests)') {
+            steps {
+                script {
+                    echo '================================================'
+                    echo '🧪 Exécution des tests de fumée...'
+                    echo '================================================'
+                }
+                sh '''
+                    # Test du health check
+                    echo "Test 1: Health Check..."
+                    curl -f http://localhost:7000/actuator/health || exit 1
+                    echo "✅ Health check OK!"
+                    
+                    # Test de l'endpoint principal
+                    echo "Test 2: GET /etudiants..."
+                    curl -f http://localhost:7000/etudiants || exit 1
+                    echo "✅ Endpoint /etudiants OK!"
+                    
+                    # Test de création d'un étudiant
+                    echo "Test 3: POST /etudiants..."
+                    curl -X POST http://localhost:7000/etudiants \
+                      -H "Content-Type: application/json" \
+                      -d '{"nom":"Test","prenom":"Jenkins","email":"test@jenkins.com","niveau":"L1"}' \
+                      -f || exit 1
+                    echo "✅ Création d'étudiant OK!"
+                    
+                    echo ""
+                    echo "✅ Tous les smoke tests sont passés avec succès!"
+                '''
             }
         }
         
@@ -133,21 +300,22 @@ pipeline {
             }
         }
         
-        stage('✅ Résumé Build & Docker') {
+        stage('✅ Résumé du Pipeline') {
             steps {
                 script {
                     echo '================================================'
-                    echo '✅ RÉSUMÉ DE L\'ÉTAPE BUILD & DOCKER'
+                    echo '✅ RÉSUMÉ DU PIPELINE'
                     echo '================================================'
                     sh """
-                        echo "✓ Code récupéré depuis: ${GIT_BRANCH}"
-                        echo "✓ Commit: ${GIT_COMMIT}"
-                        echo "✓ JAR créé: target/student-management-1.0.0.jar"
-                        echo "✓ Image Docker: ${DOCKER_IMAGE}:${IMAGE_TAG}"
-                        echo "✓ Image Docker: ${DOCKER_IMAGE}:latest"
-                        echo "✓ Images disponibles sur Docker Hub"
+                        echo "📥 Code: ${GIT_BRANCH} - ${GIT_COMMIT}"
+                        echo "🧪 Tests unitaires: PASSED"
+                        echo "🔬 Tests d'intégration: PASSED"
+                        echo "📦 JAR: target/student-management-1.0.0.jar"
+                        echo "🐳 Image: ${DOCKER_IMAGE}:${IMAGE_TAG}"
+                        echo "🚀 Déployé localement: http://localhost:7000"
+                        echo "📤 Pushed vers Docker Hub: ✓"
                         echo ""
-                        echo "🎉 Étape 1 terminée avec succès!"
+                        echo "🎉 Pipeline terminé avec succès!"
                     """
                 }
             }
@@ -156,14 +324,24 @@ pipeline {
     
     post {
         success {
-            echo '✅ Pipeline Build & Docker exécuté avec succès!'
+            echo '✅ Pipeline exécuté avec succès!'
+            echo 'Application disponible sur: http://localhost:7000'
         }
         failure {
-            echo '❌ Pipeline Build & Docker échoué!'
+            echo '❌ Pipeline échoué!'
+            sh '''
+                echo "Logs des conteneurs:"
+                docker-compose -f docker-compose.deploy.yml logs app || true
+            '''
         }
         always {
-            echo '🧹 Nettoyage des images Docker locales...'
+            echo '🧹 Nettoyage...'
             sh '''
+                # Garder l'application en cours d'exécution pour les tests
+                # Si vous voulez arrêter après le build:
+                # docker-compose -f docker-compose.deploy.yml down
+                
+                # Nettoyer les images inutilisées
                 docker image prune -f
             '''
         }
