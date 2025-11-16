@@ -4,11 +4,14 @@ pipeline {
     environment {
         // Docker Hub credentials
         DOCKER_HUB_CREDENTIALS = credentials('dockerhub-credentials')
-        DOCKER_IMAGE = 'achrefs16/student-management'
+        DOCKER_IMAGE = 'achrefs161/student-management'
         
         // Versioning
         VERSION = "${BUILD_NUMBER}"
         IMAGE_TAG = "v1.${BUILD_NUMBER}"
+        
+        // SonarQube
+        SONAR_TOKEN = credentials('sonarqube-token')
     }
     
     stages {
@@ -53,17 +56,11 @@ pipeline {
                 }
                 sh '''
                     mvn test -Dtest=*Test
-                    echo "✅ Tests unitaires terminés!"
                 '''
             }
             post {
                 always {
                     junit '**/target/surefire-reports/*.xml'
-                    publishHTML(target: [
-                        reportDir: 'target/surefire-reports',
-                        reportFiles: 'index.html',
-                        reportName: 'Test Report'
-                    ])
                 }
             }
         }
@@ -77,12 +74,11 @@ pipeline {
                 }
                 sh '''
                     mvn test -Dtest=*IntegrationTest
-                    echo "✅ Tests d'intégration terminés!"
                 '''
             }
         }
         
-        stage('📊 Rapport de Couverture') {
+        stage('📊 Rapport de Couverture Jacoco') {
             steps {
                 script {
                     echo '================================================'
@@ -91,7 +87,6 @@ pipeline {
                 }
                 sh '''
                     mvn jacoco:report
-                    echo "✅ Rapport de couverture généré!"
                 '''
             }
             post {
@@ -105,6 +100,38 @@ pipeline {
             }
         }
         
+        stage('📊 Analyse SonarQube') {
+            steps {
+                script {
+                    echo '================================================'
+                    echo '📊 Analyse de la qualité du code avec SonarQube...'
+                    echo '================================================'
+                }
+                withSonarQubeEnv('SonarQube') {
+                    sh '''
+                        mvn sonar:sonar \
+                          -Dsonar.projectKey=student-management \
+                          -Dsonar.projectName="Student Management API" \
+                          -Dsonar.host.url=http://localhost:9000 \
+                          -Dsonar.token=${SONAR_TOKEN}
+                    '''
+                }
+            }
+        }
+        
+        stage('🛡️ Quality Gate') {
+            steps {
+                script {
+                    echo '================================================'
+                    echo '🛡️ Vérification du Quality Gate SonarQube...'
+                    echo '================================================'
+                }
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: false
+                }
+            }
+        }
+        
         stage('📦 Création du JAR') {
             steps {
                 script {
@@ -114,13 +141,43 @@ pipeline {
                 }
                 sh '''
                     mvn package -DskipTests
-                    echo "✅ JAR créé avec succès!"
                     ls -lh target/*.jar
                 '''
             }
             post {
                 success {
                     archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
+                }
+            }
+        }
+        
+        stage('🔒 Scan Sécurité - Code Source (Trivy)') {
+            steps {
+                script {
+                    echo '================================================'
+                    echo '🔒 Scan de sécurité du code source avec Trivy...'
+                    echo '================================================'
+                }
+                sh '''
+                    # Scan du système de fichiers (code source)
+                    trivy fs --security-checks vuln,config,secret \
+                      --severity HIGH,CRITICAL \
+                      --format json \
+                      --output trivy-code-report.json \
+                      .
+                    
+                    # Afficher le résumé
+                    echo ""
+                    echo "📋 Résumé du scan du code source:"
+                    trivy fs --security-checks vuln,config,secret \
+                      --severity HIGH,CRITICAL \
+                      --format table \
+                      .
+                '''
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'trivy-code-report.json', allowEmptyArchive: true
                 }
             }
         }
@@ -140,46 +197,102 @@ pipeline {
                         -t ${DOCKER_IMAGE}:latest \
                         .
                     
-                    echo "✅ Image Docker construite!"
                     docker images | grep ${DOCKER_IMAGE}
                 """
             }
         }
         
-        stage('🚀 Déploiement Local - PostgreSQL') {
+        stage('🔒 Scan Sécurité - Image Docker (Trivy)') {
             steps {
                 script {
                     echo '================================================'
-                    echo '🐘 Démarrage de PostgreSQL...'
-                    echo '================================================'
-                }
-                sh '''
-                    # Arrêter les anciens conteneurs
-                    docker-compose down || true
-                    
-                    # Démarrer PostgreSQL
-                    docker-compose up -d postgres
-                    
-                    # Attendre que PostgreSQL soit prêt
-                    echo "Attente du démarrage de PostgreSQL..."
-                    sleep 15
-                    
-                    # Vérifier PostgreSQL
-                    docker-compose ps
-                    echo "✅ PostgreSQL démarré!"
-                '''
-            }
-        }
-        
-        stage('🚀 Déploiement Local - Application') {
-            steps {
-                script {
-                    echo '================================================'
-                    echo '🚀 Déploiement de l\'application...'
+                    echo '🔒 Scan de sécurité de l\'image Docker avec Trivy...'
                     echo '================================================'
                 }
                 sh """
-                    # Créer un docker-compose spécifique pour le déploiement
+                    # Scan de l'image Docker
+                    trivy image --severity HIGH,CRITICAL \
+                      --format json \
+                      --output trivy-image-report.json \
+                      ${DOCKER_IMAGE}:${IMAGE_TAG}
+                    
+                    # Afficher le résumé
+                    echo ""
+                    echo "📋 Résumé du scan de l'image Docker:"
+                    trivy image --severity HIGH,CRITICAL \
+                      --format table \
+                      ${DOCKER_IMAGE}:${IMAGE_TAG}
+                    
+                    # Générer un rapport HTML
+                    trivy image --severity HIGH,CRITICAL \
+                      --format template \
+                      --template "@/usr/local/share/trivy/templates/html.tpl" \
+                      --output trivy-image-report.html \
+                      ${DOCKER_IMAGE}:${IMAGE_TAG} || true
+                """
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'trivy-image-report.*', allowEmptyArchive: true
+                    publishHTML(target: [
+                        reportDir: '.',
+                        reportFiles: 'trivy-image-report.html',
+                        reportName: 'Trivy Security Report',
+                        allowMissing: true
+                    ])
+                }
+            }
+        }
+        
+        stage('📊 Génération Rapport de Sécurité Complet') {
+            steps {
+                script {
+                    echo '================================================'
+                    echo '📊 Génération du rapport de sécurité complet...'
+                    echo '================================================'
+                }
+                sh '''
+                    # Créer un rapport consolidé
+                    cat > security-summary.txt << EOF
+================================================
+🔒 RAPPORT DE SÉCURITÉ - Build #${BUILD_NUMBER}
+================================================
+
+Date: $(date)
+Branch: ${GIT_BRANCH}
+Commit: ${GIT_COMMIT}
+
+📊 Analyse SonarQube:
+   URL: http://localhost:9000/dashboard?id=student-management
+
+🔍 Scan Trivy - Code Source:
+$(trivy fs --severity HIGH,CRITICAL --format json . | jq -r '.Results[].Vulnerabilities | length // 0' | awk '{sum+=$1} END {print "   Vulnérabilités HIGH/CRITICAL trouvées: " sum}')
+
+🐳 Scan Trivy - Image Docker:
+$(trivy image --severity HIGH,CRITICAL --format json ${DOCKER_IMAGE}:${IMAGE_TAG} | jq -r '.Results[].Vulnerabilities | length // 0' | awk '{sum+=$1} END {print "   Vulnérabilités HIGH/CRITICAL trouvées: " sum}')
+
+================================================
+EOF
+
+                    cat security-summary.txt
+                '''
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'security-summary.txt', allowEmptyArchive: true
+                }
+            }
+        }
+        
+        stage('🚀 Déploiement Local') {
+            steps {
+                script {
+                    echo '================================================'
+                    echo '🚀 Déploiement local de l\'application...'
+                    echo '================================================'
+                }
+                sh """
+                    # Créer docker-compose pour le déploiement
                     cat > docker-compose.deploy.yml << 'EOF'
 version: '3.8'
 
@@ -231,20 +344,22 @@ networks:
     driver: bridge
 EOF
 
-                    # Déployer l'application
-                    docker-compose -f docker-compose.deploy.yml up -d app
+                    # Arrêter les anciens conteneurs
+                    docker-compose -f docker-compose.deploy.yml down || true
+                    
+                    # Démarrer les nouveaux conteneurs
+                    docker-compose -f docker-compose.deploy.yml up -d
                     
                     # Attendre le démarrage
                     echo "Attente du démarrage de l'application..."
                     sleep 30
                     
-                    # Vérifier les conteneurs
                     docker-compose -f docker-compose.deploy.yml ps
                 """
             }
         }
         
-        stage('🧪 Tests de Fumée (Smoke Tests)') {
+        stage('🧪 Tests de Fumée') {
             steps {
                 script {
                     echo '================================================'
@@ -252,26 +367,15 @@ EOF
                     echo '================================================'
                 }
                 sh '''
-                    # Test du health check
-                    echo "Test 1: Health Check..."
                     curl -f http://localhost:7000/actuator/health || exit 1
-                    echo "✅ Health check OK!"
-                    
-                    # Test de l'endpoint principal
-                    echo "Test 2: GET /etudiants..."
                     curl -f http://localhost:7000/etudiants || exit 1
-                    echo "✅ Endpoint /etudiants OK!"
                     
-                    # Test de création d'un étudiant
-                    echo "Test 3: POST /etudiants..."
                     curl -X POST http://localhost:7000/etudiants \
                       -H "Content-Type: application/json" \
-                      -d '{"nom":"Test","prenom":"Jenkins","email":"test@jenkins.com","niveau":"L1"}' \
+                      -d '{"nom":"Test","prenom":"Security","email":"security@test.com","niveau":"L1"}' \
                       -f || exit 1
-                    echo "✅ Création d'étudiant OK!"
                     
-                    echo ""
-                    echo "✅ Tous les smoke tests sont passés avec succès!"
+                    echo "✅ Tous les smoke tests sont passés!"
                 '''
             }
         }
@@ -284,36 +388,33 @@ EOF
                     echo '================================================'
                 }
                 sh """
-                    echo "Login to Docker Hub..."
                     echo ${DOCKER_HUB_CREDENTIALS_PSW} | docker login -u ${DOCKER_HUB_CREDENTIALS_USR} --password-stdin
                     
-                    echo "Pushing ${DOCKER_IMAGE}:${IMAGE_TAG}..."
                     docker push ${DOCKER_IMAGE}:${IMAGE_TAG}
-                    
-                    echo "Pushing ${DOCKER_IMAGE}:latest..."
                     docker push ${DOCKER_IMAGE}:latest
-                    
-                    echo "✅ Images pushées avec succès!"
                     
                     docker logout
                 """
             }
         }
         
-        stage('✅ Résumé du Pipeline') {
+        stage('✅ Résumé Final') {
             steps {
                 script {
                     echo '================================================'
-                    echo '✅ RÉSUMÉ DU PIPELINE'
+                    echo '✅ RÉSUMÉ DU PIPELINE COMPLET'
                     echo '================================================'
                     sh """
-                        echo "📥 Code: ${GIT_BRANCH} - ${GIT_COMMIT}"
-                        echo "🧪 Tests unitaires: PASSED"
-                        echo "🔬 Tests d'intégration: PASSED"
-                        echo "📦 JAR: target/student-management-1.0.0.jar"
-                        echo "🐳 Image: ${DOCKER_IMAGE}:${IMAGE_TAG}"
-                        echo "🚀 Déployé localement: http://localhost:7000"
-                        echo "📤 Pushed vers Docker Hub: ✓"
+                        echo "✓ Code analysé: ${GIT_BRANCH}"
+                        echo "✓ Tests unitaires: PASSED"
+                        echo "✓ Tests d'intégration: PASSED"
+                        echo "✓ Couverture de code: Rapport Jacoco généré"
+                        echo "✓ Qualité du code: SonarQube - http://localhost:9000"
+                        echo "✓ Sécurité code source: Trivy scan effectué"
+                        echo "✓ Sécurité image Docker: Trivy scan effectué"
+                        echo "✓ Image Docker: ${DOCKER_IMAGE}:${IMAGE_TAG}"
+                        echo "✓ Déploiement local: http://localhost:7000"
+                        echo "✓ Push Docker Hub: SUCCESS"
                         echo ""
                         echo "🎉 Pipeline terminé avec succès!"
                     """
@@ -325,23 +426,18 @@ EOF
     post {
         success {
             echo '✅ Pipeline exécuté avec succès!'
-            echo 'Application disponible sur: http://localhost:7000'
+            echo '📊 SonarQube: http://localhost:9000/dashboard?id=student-management'
+            echo '🚀 Application: http://localhost:7000'
         }
         failure {
             echo '❌ Pipeline échoué!'
             sh '''
-                echo "Logs des conteneurs:"
                 docker-compose -f docker-compose.deploy.yml logs app || true
             '''
         }
         always {
             echo '🧹 Nettoyage...'
             sh '''
-                # Garder l'application en cours d'exécution pour les tests
-                # Si vous voulez arrêter après le build:
-                # docker-compose -f docker-compose.deploy.yml down
-                
-                # Nettoyer les images inutilisées
                 docker image prune -f
             '''
         }
