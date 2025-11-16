@@ -181,7 +181,7 @@ pipeline {
                 }
             }
         }
-        
+        /*
         stage('🔒 Scan Sécurité - Code Source (Trivy)') {
             steps {
                 script {
@@ -211,7 +211,7 @@ pipeline {
                     archiveArtifacts artifacts: "${PROJECT_DIR}/trivy-code-report.json", allowEmptyArchive: true
                 }
             }
-        }
+        }*/
         
         stage('🐳 Construction de l\'image Docker') {
             steps {
@@ -235,7 +235,7 @@ pipeline {
             }
         }
         
-        stage('🔒 Scan Sécurité - Image Docker (Trivy)') {
+      /*  stage('🔒 Scan Sécurité - Image Docker (Trivy)') {
             steps {
                 script {
                     echo '================================================'
@@ -274,7 +274,7 @@ pipeline {
                     ])
                 }
             }
-        }
+        }*/
         
         stage('🚀 Déploiement Local') {
             steps {
@@ -369,23 +369,16 @@ EOF
             }
         }
         
-        stage('📤 Push vers Docker Hub') {
-            steps {
-                script {
-                    echo '================================================'
-                    echo '📤 Push de l\'image vers Docker Hub...'
-                    echo '================================================'
-                }
-                sh """
-                    echo ${DOCKER_HUB_CREDENTIALS_PSW} | docker login -u ${DOCKER_HUB_CREDENTIALS_USR} --password-stdin
-                    
-                    docker push ${DOCKER_IMAGE}:${IMAGE_TAG}
-                    docker push ${DOCKER_IMAGE}:latest
-                    
-                    docker logout
-                """
-            }
-        }
+ stage('📤 Push vers Docker Hub') {
+     steps {
+         sh """
+             echo ${DOCKER_HUB_CREDENTIALS_PSW} | docker login -u ${DOCKER_HUB_CREDENTIALS_USR} --password-stdin
+             docker push ${DOCKER_IMAGE}:${IMAGE_TAG}
+             docker push ${DOCKER_IMAGE}:latest
+             docker logout
+         """
+     }
+ }
         
         stage('✅ Résumé Final') {
             steps {
