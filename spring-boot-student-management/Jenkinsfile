@@ -1,3 +1,75 @@
+// ===============================
+// 🔔 SLACK NOTIFICATION FUNCTION
+// ===============================
+def sendSlackNotification(String status, String stage = '') {
+    def color = ''
+    def emoji = ''
+    def message = ''
+    
+    switch(status) {
+        case 'STARTED':
+            color = '#439FE0'
+            emoji = '🚀'
+            message = "Pipeline démarré"
+            break
+        case 'SUCCESS':
+            color = 'good'
+            emoji = '✅'
+            message = "Pipeline réussi"
+            break
+        case 'FAILURE':
+            color = 'danger'
+            emoji = '❌'
+            message = "Pipeline échoué"
+            break
+        case 'UNSTABLE':
+            color = 'warning'
+            emoji = '⚠️'
+            message = "Pipeline instable"
+            break
+        case 'STAGE_SUCCESS':
+            color = 'good'
+            emoji = '✅'
+            message = "Stage réussi: ${stage}"
+            break
+        case 'STAGE_FAILURE':
+            color = 'danger'
+            emoji = '❌'
+            message = "Stage échoué: ${stage}"
+            break
+    }
+    
+    def attachments = [
+        [
+            color: color,
+            text: "${emoji} *${message}*",
+            fields: [
+                [ title: "Job", value: "${env.JOB_NAME}", short: true ],
+                [ title: "Build", value: "#${env.BUILD_NUMBER}", short: true ],
+                [ title: "Branch", value: "${env.GIT_BRANCH ?: 'N/A'}", short: true ],
+                [ title: "Durée", value: "${currentBuild.durationString.replace(' and counting', '')}", short: true ]
+            ],
+            actions: [
+                [
+                    type: "button",
+                    text: "📊 Voir les logs",
+                    url: "${env.BUILD_URL}console"
+                ]
+            ],
+            footer: "Jenkins CI/CD",
+            footer_icon: "https://jenkins.io/images/logos/jenkins/jenkins.png",
+            ts: System.currentTimeMillis() / 1000
+        ]
+    ]
+    
+    slackSend(
+        channel: '#jenkins-builds',
+        attachments: attachments
+    )
+}
+
+
+
 pipeline {
     agent any
     
